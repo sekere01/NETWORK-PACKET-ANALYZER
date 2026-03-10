@@ -1,172 +1,144 @@
-<div align="center">
+#!/usr/bin/env python3
+"""
+NETWORK PACKET SNIFFER - FOR EDUCATIONAL PURPOSES ONLY
 
-# 📡 Network Packet Analyzer
+Output will be saved to packet_capture_log.txt in the same directory
+as this script. Only metadata is logged (no full payloads for privacy).
+"""
 
-![Python](https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python&logoColor=white)
-![Scapy](https://img.shields.io/badge/Library-Scapy-orange?style=for-the-badge)
-![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey?style=for-the-badge)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+from scapy.all import *
+from scapy.layers import http
+import argparse
+import textwrap
+from datetime import datetime
+import os
 
-> A Python-based network packet sniffer that captures and analyzes live network traffic — logging IP addresses, protocols, TCP flags, HTTP requests, and DNS queries for educational and lab use.
+# Constants
+LOG_FILE = "packet_capture_log.txt"
+MAX_LOG_SIZE = 5 * 1024 * 1024  # 5MB max log size
 
-⚠️ **For educational and authorized lab use only.**
+def init_log_file():
+    """Initialize log file with header"""
+    header = (
+        "PACKET CAPTURE LOG - EDUCATIONAL USE ONLY\n"
+        f"Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        "==========================================\n\n"
+    )
+    with open(LOG_FILE, "w") as f:
+        f.write(header)
 
-</div>
+def write_to_log(entry):
+    """Write entry to log file with size management"""
+    # Rotate log if it gets too large
+    if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > MAX_LOG_SIZE:
+        rotate_log()
+    
+    with open(LOG_FILE, "a") as f:
+        f.write(entry + "\n")
 
----
+def rotate_log():
+    """Rotate log file keeping previous version"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = f"packet_capture_log_{timestamp}.txt"
+    os.rename(LOG_FILE, backup_file)
+    print(f"\n[!] Log rotated to {backup_file}")
+    init_log_file()
 
-## 📸 Overview
+def get_interface():
+    """Get available network interfaces"""
+    interfaces = get_if_list()
+    print("Available interfaces:")
+    for i, iface in enumerate(interfaces, 1):
+        print(f"{i}. {iface}")
+    selection = int(input("Select interface number: ")) - 1
+    return interfaces[selection]
 
-This tool uses the **Scapy** library to intercept and dissect network packets in real time. It identifies key packet metadata including source/destination IPs, transport protocols, HTTP activity, and DNS lookups — logging everything to a rotating log file for later review.
+def packet_callback(packet):
+    """Process each captured packet and log to file"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_entry = ""
+    
+    # IP Packet Analysis
+    if packet.haslayer(IP):
+        src_ip = packet[IP].src
+        dst_ip = packet[IP].dst
+        protocol = packet[IP].proto
+        
+        log_entry += f"[{timestamp}] IP Packet:\n"
+        log_entry += f"    Source: {src_ip}:{packet.sport if hasattr(packet, 'sport') else 'N/A'}\n"
+        log_entry += f"    Destination: {dst_ip}:{packet.dport if hasattr(packet, 'dport') else 'N/A'}\n"
+        log_entry += f"    Protocol: {get_protocol_name(protocol)}\n"
+        
+        # TCP/UDP Analysis
+        if packet.haslayer(TCP):
+            log_entry += f"    TCP Flags: {packet[TCP].flags}\n"
+        elif packet.haslayer(UDP):
+            log_entry += "    UDP Packet\n"
+    
+    # HTTP Analysis
+    if packet.haslayer(http.HTTPRequest):
+        http_layer = packet[http.HTTPRequest]
+        log_entry += "    [!] HTTP Request:\n"
+        log_entry += f"        Host: {http_layer.Host.decode()}\n"
+        log_entry += f"        Path: {http_layer.Path.decode()}\n"
+        log_entry += f"        Method: {http_layer.Method.decode()}\n"
+    
+    # DNS Analysis
+    elif packet.haslayer(DNS):
+        log_entry += "    [!] DNS Query:\n"
+        if packet.haslayer(DNSQR):  # DNS Question Record
+            log_entry += f"        Query: {packet[DNSQR].qname.decode()}\n"
+    
+    # Write to log and print to console
+    if log_entry:
+        write_to_log(log_entry)
+        print(log_entry.strip())  # Also show in console
 
----
+def get_protocol_name(proto_num):
+    """Convert protocol number to name"""
+    protocols = {
+        1: "ICMP",
+        6: "TCP",
+        17: "UDP",
+        2: "IGMP",
+        89: "OSPF"
+    }
+    return protocols.get(proto_num, f"Unknown ({proto_num})")
 
-## ✨ Features
+def main():
+    print(__doc__)  # Show ethical disclaimer
+    init_log_file()
+    
+    # Argument parsing
+    parser = argparse.ArgumentParser(description='Network Packet Sniffer - Educational Use Only')
+    parser.add_argument('-i', '--interface', help='Network interface to sniff')
+    parser.add_argument('-c', '--count', type=int, default=0, 
+                       help='Number of packets to capture (0 for unlimited)')
+    parser.add_argument('-f', '--filter', default='', 
+                       help='BPF filter (e.g., "tcp port 80")')
+    args = parser.parse_args()
+    
+    interface = args.interface if args.interface else get_interface()
+    
+    print(f"\n[+] Starting packet capture on {interface}")
+    print(f"[+] Filter: {args.filter if args.filter else 'None'}")
+    print(f"[+] Logging to: {os.path.abspath(LOG_FILE)}")
+    print("[+] Press Ctrl+C to stop\n")
+    
+    try:
+        sniff(iface=interface,
+              prn=packet_callback,
+              count=args.count,
+              filter=args.filter,
+              store=0)
+    except KeyboardInterrupt:
+        print("\n[!] Capture stopped by user")
+        write_to_log(f"\n[Capture stopped by user at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+    except PermissionError:
+        print("[ERROR] Requires root/admin privileges. Try running with sudo/Admin.")
+    except Exception as e:
+        print(f"[ERROR] {str(e)}")
+        write_to_log(f"[ERROR] {str(e)}")
 
-### 🔍 Packet Analysis
-- Captures **IP packets** with source/destination IPs and ports
-- Identifies transport protocols: **TCP, UDP, ICMP, IGMP, OSPF**
-- Extracts **TCP flags** (SYN, ACK, FIN, RST, etc.)
-
-### 🌐 Protocol-Specific Inspection
-| Protocol | Details Captured |
-|---|---|
-| **HTTP** | Host, path, and request method |
-| **DNS** | Query name from DNS question records |
-| **TCP** | Flags, source/destination ports |
-| **UDP** | Source/destination ports |
-
-### 📝 Logging
-- All captured packets saved to `packet_capture_log.txt`
-- **Auto-rotating logs** — rotates at 5MB to prevent disk bloat
-- Timestamped entries for every packet
-- Simultaneous console and file output
-
-### ⚙️ Flexible Options
-- Select from available **network interfaces** interactively
-- Set a **packet count limit** or run indefinitely
-- Apply **BPF filters** (e.g. `tcp port 80`) for targeted capture
-- Graceful stop with `Ctrl+C`
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Python 3.x
-- Scapy library
-- **Root / Administrator privileges** (required for raw packet capture)
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/sekere01/network-packet-analyzer.git
-
-# Navigate into the directory
-cd network-packet-analyzer
-
-# Install dependencies
-pip install scapy
-```
-
-### Running the Tool
-
-**Linux / macOS** (requires sudo):
-```bash
-sudo python3 sniffer.py
-```
-
-**Windows** (run terminal as Administrator):
-```bash
-python sniffer.py
-```
-
----
-
-## 📖 Usage
-
-### Interactive Mode
-Simply run the script and select your network interface from the list:
-```bash
-sudo python3 sniffer.py
-```
-
-### Command-Line Arguments
-```bash
-sudo python3 sniffer.py [OPTIONS]
-```
-
-| Argument | Description | Example |
-|---|---|---|
-| `-i`, `--interface` | Network interface to sniff | `-i eth0` |
-| `-c`, `--count` | Number of packets to capture (`0` = unlimited) | `-c 100` |
-| `-f`, `--filter` | BPF filter expression | `-f "tcp port 80"` |
-
-### Examples
-```bash
-# Capture 50 packets on eth0
-sudo python3 sniffer.py -i eth0 -c 50
-
-# Capture only HTTP traffic
-sudo python3 sniffer.py -i eth0 -f "tcp port 80"
-
-# Capture DNS queries only
-sudo python3 sniffer.py -i eth0 -f "udp port 53"
-
-# Unlimited capture on all interfaces
-sudo python3 sniffer.py -i eth0
-```
-
----
-
-## 📄 Sample Output
-
-```
-[2026-03-01 14:23:11] IP Packet:
-    Source: 192.168.1.5:54321
-    Destination: 8.8.8.8:53
-    Protocol: UDP
-    [!] DNS Query:
-        Query: www.example.com.
-
-[2026-03-01 14:23:12] IP Packet:
-    Source: 192.168.1.5:49200
-    Destination: 93.184.216.34:80
-    Protocol: TCP
-    TCP Flags: S
-    [!] HTTP Request:
-        Host: www.example.com
-        Path: /index.html
-        Method: GET
-```
-
----
-
-## 📁 Project Structure
-
-```
-network-packet-analyzer/
-│
-├── sniffer.py                  # Main application file
-├── packet_capture_log.txt      # Auto-generated capture log
-└── README.md                   # Project documentation
-```
-
----
-
-## ⚠️ Ethical Use & Legal Notice
-
-> This tool is intended **strictly for educational purposes** and authorized network environments such as personal lab setups.
->
-> - ✅ Use on networks you **own or have explicit permission** to test
-> - ✅ Use in isolated **lab/VM environments**
-> - ❌ Do NOT use on public, corporate, or any network without written authorization
->
-> Unauthorized packet sniffing may violate the **Computer Fraud and Abuse Act (CFAA)**, **GDPR**, and equivalent laws worldwide. Only packet **metadata** is logged — full payloads are not captured to minimize privacy risk.
-
----
-
-## 🤝 Contributing
-
-Contributions, issues, and feature requests are welcome! Feel free to open an issue or submit a pull request.
+if __name__ == "__main__":
+    main()
